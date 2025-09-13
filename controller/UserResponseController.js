@@ -8,6 +8,9 @@ const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const path = require("path");
 const QuestionPreFillService = require("../services/questionPreFillService");
+const { generateRoadmap } = require("../services/roadmapGenerator");
+const Roadmap = require("../models/Roadmap");
+const Course = require("../models/Course");
 
 /**
  * Extract text content from uploaded files
@@ -40,7 +43,7 @@ async function extractText(filePath, mimetype) {
 }
 
 /**
- * Validate that all required questions are answered
+ * Validate that all required questions are answered and CV is uploaded
  * @param {Array} responses - Array of user responses
  * @param {Array} questions - Array of question objects
  * @returns {Object|null} Error object if validation fails, null if valid
@@ -49,13 +52,34 @@ function validateAllQuestionsAnswered(responses, questions) {
   const responseMap = new Map();
   responses.forEach(r => responseMap.set(r.questionId, r));
 
+  let hasCVUpload = false;
+
   for (const question of questions) {
     const response = responseMap.get(question._id.toString());
     
+    // Check if this is a CV upload question
+    const isCVQuestion = question.type === "upload" && (
+      question.text.toLowerCase().includes('most recent cv') ||
+      question.text.toLowerCase().includes('please upload your most recent') ||
+      (question.text.toLowerCase().includes('cv') && question.text.toLowerCase().includes('pdf') && !question.text.toLowerCase().includes('optional')) ||
+      (question.text.toLowerCase().includes('resume') && question.text.toLowerCase().includes('pdf') && !question.text.toLowerCase().includes('optional'))
+    );
+
+    // If this is a CV question and has files, mark CV as uploaded
+    if (isCVQuestion && response && response.files && response.files.length > 0) {
+      hasCVUpload = true;
+    }
+
+    // Skip validation for optional questions
+    if (question.optional) {
+      continue;
+    }
+
+    // For required questions, validate they are answered
     if (!response) {
       return {
         status: 400,
-        message: `Question "${question.text}" is not answered`
+        message: `Required question "${question.text}" is not answered`
       };
     }
 
@@ -125,6 +149,14 @@ function validateAllQuestionsAnswered(responses, questions) {
           message: `Invalid question type: ${question.type}`
         };
     }
+  }
+
+  // Ensure CV is uploaded (mandatory requirement)
+  if (!hasCVUpload) {
+    return {
+      status: 400,
+      message: "CV upload is mandatory. Please upload your CV to continue."
+    };
   }
 
   return null;
@@ -335,6 +367,79 @@ async function cleanupUploadedFiles(filePaths) {
 }
 
 /**
+ * Automatically generate roadmap after user responses are saved
+ * @param {string} userId - User ID
+ * @param {Array} responses - User responses
+ */
+async function generateRoadmapAfterResponses(userId, responses) {
+  try {
+    console.log('Auto-generating roadmap for user:', userId);
+    
+    // Check if roadmap already exists
+    const existingRoadmap = await Roadmap.findOne({ user: userId });
+    if (existingRoadmap) {
+      console.log('Roadmap already exists for user:', userId);
+      return;
+    }
+
+    // Generate roadmap using AI
+    const roadmapResult = await generateRoadmap(responses);
+    
+    if (!roadmapResult.success) {
+      console.error('Failed to auto-generate roadmap:', roadmapResult.error);
+      return;
+    }
+
+    // Populate course details
+    const populatedCourses = await Promise.all(
+      roadmapResult.data.courses.map(async (courseData) => {
+        const course = await Course.findById(courseData.courseId);
+        if (!course) {
+          console.warn(`Course not found: ${courseData.courseId}`);
+          return null;
+        }
+        
+        return {
+          course: course,
+          order: courseData.order,
+          reason: courseData.reason,
+          estimatedDuration: courseData.estimatedDuration,
+          prerequisites: courseData.prerequisites || []
+        };
+      })
+    );
+
+    const validCourses = populatedCourses.filter(course => course !== null);
+    
+    if (validCourses.length === 0) {
+      console.error('No valid courses found for auto-generated roadmap');
+      return;
+    }
+
+    // Create roadmap document
+    const roadmap = new Roadmap({
+      user: userId,
+      title: roadmapResult.data.title,
+      description: roadmapResult.data.description,
+      courses: validCourses,
+      timeline: roadmapResult.data.timeline,
+      goals: roadmapResult.data.goals,
+      skills: roadmapResult.data.skills,
+      status: roadmapResult.data.status,
+      progress: roadmapResult.data.progress,
+      aiMetadata: roadmapResult.metadata
+    });
+
+    await roadmap.save();
+    console.log('Roadmap auto-generated successfully for user:', userId);
+
+  } catch (error) {
+    console.error('Error auto-generating roadmap:', error);
+    // Don't throw error - roadmap generation failure shouldn't break response saving
+  }
+}
+
+/**
  * Save user responses to questionnaire
  * Validates all questions are answered, processes file uploads, and saves to database
  */
@@ -399,7 +504,7 @@ const saveUserResponses = async (req, res, next) => {
       return next(createError(404, `One or more questions not found or inactive. Missing: ${missingIds.join(", ")}`));
     }
 
-    // Validate that all questions are answered
+    // Validate that all required questions are answered and CV is uploaded
     const validationError = validateAllQuestionsAnswered(responses, questions);
     if (validationError) {
       return next(createError(validationError.status, validationError.message));
@@ -413,10 +518,8 @@ const saveUserResponses = async (req, res, next) => {
       }
     });
 
-    // Validate that at least one document is uploaded (either referenced or direct)
-    if (allFileReferences.length === 0 && uploadedFiles.length === 0) {
-      return next(createError(400, "At least one document must be uploaded"));
-    }
+    // Note: CV upload validation is now handled in validateAllQuestionsAnswered
+    // This ensures CV is mandatory while other questions can be optional
 
     // Process all uploaded files (both referenced and direct uploads)
     let processedFilesResult;
@@ -506,6 +609,16 @@ const saveUserResponses = async (req, res, next) => {
     } catch (updateError) {
       console.error("Failed to update user onboarding status:", updateError);
       // Don't fail the entire request if this update fails
+    }
+
+    // Auto-generate roadmap after successful response saving
+    try {
+      // Get fresh responses to ensure we have all the data
+      const freshResponses = await UserResponse.find({ user: userId });
+      await generateRoadmapAfterResponses(userId, freshResponses);
+    } catch (roadmapError) {
+      console.error("Failed to auto-generate roadmap:", roadmapError);
+      // Don't fail the entire request if roadmap generation fails
     }
 
     // Return success response
