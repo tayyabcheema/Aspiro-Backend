@@ -715,4 +715,23 @@ const preFillQuestions = async (req, res, next) => {
   }
 };
 
-module.exports = { saveUserResponses, preFillQuestions };
+const getUserResponses = async(req,res,next)=>{
+  try {
+    const userId = req.user.id || req.user._id
+    const user = await User.findById(userId)
+    if(!user || user.role !== "user"){
+      return next(createError(403, "Only registered users can get their responses"))
+    }
+    const responses = await UserResponse.find({user:userId})
+    return res.status(200).json({
+      success: true,
+      message: "Responses fetched successfully",
+      data: responses
+    })
+  } catch (error) {
+    console.error("Error fetching user responses:", error);
+    return next(createError(500, "Internal server error"));
+  }
+}
+
+module.exports = { saveUserResponses, preFillQuestions, getUserResponses };
