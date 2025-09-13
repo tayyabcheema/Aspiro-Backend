@@ -159,10 +159,121 @@ const getAllQuestionsForAI = async (req, res, next) => {
   }
 };
 
+const updateQuestion = async (req, res, next) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    const user = await User.findById(userId);
+
+    if (!user || user.role !== "admin") {
+      return next(
+        createError(403, "You are not allowed! Only admin can update questions")
+      );
+    }
+
+    const { id } = req.params;
+    const { text, type, options, step, category, optional, status, documents } = req.body;
+
+    if (!id) {
+      return next(createError(400, "Question ID is required"));
+    }
+
+    // Validate required fields
+    if (!text || !type || !step || !category) {
+      return next(
+        createError(
+          400,
+          "Please provide all required fields: text, type, step, category"
+        )
+      );
+    }
+
+    if (!step.stepNumber || !step.stepName) {
+      return next(createError(400, "Step must include stepNumber and stepName"));
+    }
+
+    if (type === "multiple-choice" && (!options || options.length === 0)) {
+      return next(
+        createError(400, "Options are required for multiple-choice questions")
+      );
+    }
+
+    // Check if question exists
+    const existingQuestion = await Question.findById(id);
+    if (!existingQuestion) {
+      return next(createError(404, "Question not found"));
+    }
+
+    // Update the question
+    const updatedQuestion = await Question.findByIdAndUpdate(
+      id,
+      {
+        text,
+        type,
+        options,
+        step,
+        category,
+        optional,
+        status,
+        documents,
+      },
+      { new: true, runValidators: true }
+    );
+
+    return res.status(200).json({
+      message: "Question updated successfully",
+      data: updatedQuestion,
+    });
+  } catch (error) {
+    console.error("Error updating question:", error);
+
+    // Handle duplicate key error
+    if (error.code === 11000) {
+      return next(createError(409, "Duplicate question found. A question with the same text, step, and category already exists."));
+    }
+
+    return next(createError(500, "Internal server error"));
+  }
+};
+
+const deleteQuestion = async (req, res, next) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    const user = await User.findById(userId);
+
+    if (!user || user.role !== "admin") {
+      return next(
+        createError(403, "You are not allowed! Only admin can delete questions")
+      );
+    }
+
+    const { id } = req.params;
+
+    if (!id) {
+      return next(createError(400, "Question ID is required"));
+    }
+
+    // Check if question exists
+    const existingQuestion = await Question.findById(id);
+    if (!existingQuestion) {
+      return next(createError(404, "Question not found"));
+    }
+
+    // Delete the question
+    await Question.findByIdAndDelete(id);
+
+    return res.status(200).json({
+      message: "Question deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error deleting question:", error);
+    return next(createError(500, "Internal server error"));
+  }
+};
 
 
 
 
 
 
-module.exports = {addQuestion,getAllQuestions, getAllQuestionsForAI};
+
+module.exports = {addQuestion, getAllQuestions, getAllQuestionsForAI, updateQuestion, deleteQuestion};

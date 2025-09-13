@@ -9,6 +9,7 @@ const requestLogger = require('./middleware/requestLogger');
 const questionRoutes = require('./routes/questionRoutes');
 const userResponseRoutes = require('./routes/userResponseRoutes');
 const aiProcessingRoutes = require('./routes/aiProcessingRoutes');
+const roadmapRoutes = require('./routes/roadmapRoutes');
 
 dotenv.config({ override: true });
 
@@ -49,6 +50,7 @@ app.use('/api/admin', adminUserRoutes);
 app.use('/api/questions', questionRoutes);
 app.use('/api/user-response', userResponseRoutes);
 app.use('/api/ai-processing', aiProcessingRoutes);
+app.use('/api/roadmap', roadmapRoutes);
 
 // Error handler
 app.use(errorHandler);

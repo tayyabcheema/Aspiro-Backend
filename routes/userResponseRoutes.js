@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const multer = require("multer");
 const verifyToken = require("../middleware/authMiddleware");
-const { saveUserResponses, preFillQuestions } = require("../controller/UserResponseController");
+const { saveUserResponses, preFillQuestions, getUserResponses } = require("../controller/UserResponseController");
 
 
 // ✅ Multer storage setup
@@ -31,6 +31,8 @@ router.post("/save", upload.array("files"), saveUserResponses);
 
 // ✅ New POST route for pre-filling questions based on uploaded documents
 router.post("/prefill", upload.array("files"), preFillQuestions);
+
+router.get("/", getUserResponses);
 
 
 module.exports = router;
